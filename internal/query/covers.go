@@ -34,14 +34,35 @@ func UpdateAlbumDefaultCovers() (err error) {
 			) b ON b.album_uid = albums.album_uid
 		SET thumb = b.file_hash WHERE ?`, condition)
 	case SQLite3:
-		res = Db().Table(entity.Album{}.TableName()).
-			UpdateColumn("thumb", gorm.Expr(`(
-		SELECT f.file_hash FROM files f 
-			JOIN photos_albums pa ON pa.album_uid = albums.album_uid AND pa.photo_uid = f.photo_uid AND pa.hidden = 0 AND pa.missing = 0
-			JOIN photos p ON p.id = f.photo_id AND p.photo_private = 0 AND p.deleted_at IS NULL AND p.photo_quality > 0
-			WHERE f.deleted_at IS NULL AND f.file_missing = 0 AND f.file_hash <> '' AND f.file_primary = 1 AND f.file_error = '' AND f.file_type = 'jpg' 
-			ORDER BY p.taken_at DESC LIMIT 1
-		) WHERE ?`, condition))
+		res = Db().Exec(`UPDATE albums SET thumb = (
+		WITH photo_file_recent as (
+			SELECT
+				pa.album_uid,
+				f.file_hash,
+				ROW_NUMBER() OVER ( PARTITION BY pa.album_uid ORDER BY p.taken_at DESC ) as position
+			FROM 
+				photos_albums pa
+			JOIN
+				photos p ON p.photo_uid = pa.photo_uid
+			JOIN
+				files f ON f.photo_uid = pa.photo_uid
+			WHERE
+				pa.hidden = 0 AND pa.missing = 0
+				AND
+				p.photo_private = 0 AND p.deleted_at IS NULL AND p.photo_quality > 0		
+				AND
+				f.deleted_at IS NULL AND f.file_missing = 0 AND f.file_hash <> '' AND f.file_primary = 1 AND f.file_error = '' AND f.file_type = 'jpg'
+		)
+	
+		SELECT
+			fpr.file_hash
+		FROM
+			photo_file_recent fpr
+		WHERE
+			fpr.position = 1
+			AND
+			fpr.album_uid = albums.album_uid
+		) WHERE ?`, condition)
 	default:
 		log.Warnf("sql: unsupported dialect %s", DbDialect())
 		return nil
